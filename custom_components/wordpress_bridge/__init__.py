@@ -242,6 +242,19 @@ async def _async_handle_command(
         )
         return
 
+    current_state = hass.states.get(entity_id)
+    stale_message = _command_stale_reason(command, current_state)
+    if stale_message is not None:
+        await api.async_ack_command(
+            command_id,
+            status="stale",
+            message=stale_message,
+            state=_serialize_state(current_state) if current_state is not None else None,
+        )
+        if current_state is not None:
+            await _async_push_latest_state(api, current_state)
+        return
+
     service_data = {"entity_id": entity_id}
     if isinstance(payload, dict):
         service_data.update(payload)
@@ -269,6 +282,47 @@ async def _async_handle_command(
         message="Command executed",
         state=_serialize_state(state) if state is not None else None,
     )
+    if state is not None:
+        await _async_push_latest_state(api, state)
+
+
+async def _async_push_latest_state(api: WordPressBridgeApi, state: State) -> None:
+    """Push the latest state after a command result."""
+    try:
+        await api.async_push_states([_serialize_state(state)])
+    except WordPressBridgeApiError as err:
+        _LOGGER.warning("Could not push command result state for %s: %s", state.entity_id, err)
+
+
+def _command_stale_reason(command: dict[str, Any], current_state: State | None) -> str | None:
+    """Return a reason if a command no longer matches the expected HA state."""
+    if current_state is None:
+        return "Entity no longer exists in Home Assistant"
+
+    expected_state = command.get("expected_state")
+    if isinstance(expected_state, str) and expected_state != "" and current_state.state != expected_state:
+        return (
+            f"Stale command skipped: expected state {expected_state!r}, "
+            f"current state is {current_state.state!r}"
+        )
+
+    expected_context_id = command.get("expected_context_id")
+    if (
+        isinstance(expected_context_id, str)
+        and expected_context_id != ""
+        and current_state.context.id != expected_context_id
+    ):
+        return "Stale command skipped: Home Assistant context changed before execution"
+
+    expected_last_updated = command.get("expected_last_updated")
+    if (
+        isinstance(expected_last_updated, str)
+        and expected_last_updated != ""
+        and _format_datetime(current_state.last_updated) != expected_last_updated
+    ):
+        return "Stale command skipped: Home Assistant state timestamp changed before execution"
+
+    return None
 
 
 def _serialize_state(state: State) -> dict[str, Any]:
