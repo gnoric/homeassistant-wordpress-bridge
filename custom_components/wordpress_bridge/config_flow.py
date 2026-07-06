@@ -8,6 +8,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
 
 from .api import (
     WordPressBridgeApi,
@@ -50,8 +51,8 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             vol.Required(CONF_API_TOKEN): str,
             vol.Required(
                 CONF_ENTITY_IDS,
-                default=", ".join(defaults.get(CONF_ENTITY_IDS, [])),
-            ): str,
+                default=defaults.get(CONF_ENTITY_IDS, []),
+            ): EntitySelector(EntitySelectorConfig(multiple=True)),
             vol.Required(
                 CONF_POLL_INTERVAL,
                 default=defaults.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
