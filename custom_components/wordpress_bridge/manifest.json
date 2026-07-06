@@ -1,7 +1,7 @@
 {
   "domain": "wordpress_bridge",
   "name": "WordPress Bridge",
-  "codeowners": ["@gnoric"],
+  "codeowners": [],
   "config_flow": true,
   "documentation": "https://github.com/gnoric/homeassistant-wordpress-bridge",
   "iot_class": "cloud_push",
