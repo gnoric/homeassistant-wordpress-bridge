@@ -1,0 +1,39 @@
+{
+  "title": "WordPress Bridge",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect WordPress",
+        "description": "Enter the WordPress site URL, bridge token, and the Home Assistant entities that WordPress may display or control.",
+        "data": {
+          "site_url": "WordPress site URL",
+          "api_token": "Bridge API token",
+          "entity_ids": "Entities to expose",
+          "poll_interval": "Command poll interval in seconds",
+          "push_on_start": "Push current states when Home Assistant starts"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to WordPress.",
+      "invalid_auth": "WordPress rejected the bridge token."
+    },
+    "abort": {
+      "already_configured": "This WordPress site is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "WordPress Bridge options",
+        "data": {
+          "site_url": "WordPress site URL",
+          "api_token": "Bridge API token",
+          "entity_ids": "Entities to expose",
+          "poll_interval": "Command poll interval in seconds",
+          "push_on_start": "Push current states when Home Assistant starts"
+        }
+      }
+    }
+  }
+}
