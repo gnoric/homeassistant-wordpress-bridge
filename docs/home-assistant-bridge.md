@@ -101,7 +101,10 @@ Response:
       "id": 123,
       "entity_id": "switch.garden_lights",
       "command": "turn_on",
-      "payload": {}
+      "payload": {},
+      "expected_state": "off",
+      "expected_context_id": "...",
+      "expected_last_updated": "2026-07-06T12:00:00+00:00"
     }
   ]
 }
@@ -127,6 +130,23 @@ Success request:
 {
   "status": "done",
   "message": "Command executed",
+  "state": {
+    "entity_id": "switch.garden_lights",
+    "state": "on",
+    "attributes": {},
+    "last_changed": "2026-07-06T12:00:01+00:00",
+    "last_updated": "2026-07-06T12:00:01+00:00",
+    "context_id": "..."
+  }
+}
+```
+
+Stale command request:
+
+```json
+{
+  "status": "stale",
+  "message": "Stale command skipped: Home Assistant context changed before execution",
   "state": {
     "entity_id": "switch.garden_lights",
     "state": "on",
