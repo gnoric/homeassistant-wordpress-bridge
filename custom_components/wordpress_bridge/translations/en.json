@@ -8,7 +8,7 @@
         "data": {
           "site_url": "WordPress site URL",
           "api_token": "Bridge API token",
-          "entity_ids": "Entity IDs, comma separated",
+          "entity_ids": "Entities to expose",
           "poll_interval": "Command poll interval in seconds",
           "push_on_start": "Push current states when Home Assistant starts"
         }
@@ -29,7 +29,7 @@
         "data": {
           "site_url": "WordPress site URL",
           "api_token": "Bridge API token",
-          "entity_ids": "Entity IDs, comma separated",
+          "entity_ids": "Entities to expose",
           "poll_interval": "Command poll interval in seconds",
           "push_on_start": "Push current states when Home Assistant starts"
         }
