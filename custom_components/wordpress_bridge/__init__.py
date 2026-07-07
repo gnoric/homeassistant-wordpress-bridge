@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
@@ -115,7 +114,12 @@ async def async_setup_entry(
         if new_state is None:
             return
 
-        task = hass.async_create_task(async_push_state(new_state))
+        task = _create_entry_background_task(
+            hass,
+            entry,
+            async_push_state(new_state),
+            f"{DOMAIN} push state {new_state.entity_id}",
+        )
         push_tasks.add(task)
         task.add_done_callback(push_tasks.discard)
 
@@ -126,8 +130,11 @@ async def async_setup_entry(
     )
 
     stop_event = asyncio.Event()
-    poll_task = hass.async_create_task(
-        _async_command_poll_loop(hass, api, entity_ids, poll_interval, stop_event)
+    poll_task = _create_entry_background_task(
+        hass,
+        entry,
+        _async_command_poll_loop(hass, api, entity_ids, poll_interval, stop_event),
+        f"{DOMAIN} command poll loop",
     )
 
     runtime = WordPressBridgeRuntime(
@@ -142,14 +149,16 @@ async def async_setup_entry(
     entry.runtime_data = runtime
 
     if config.get(CONF_PUSH_ON_START, DEFAULT_PUSH_ON_START):
-        startup_push_task = hass.async_create_task(async_push_startup_states())
+        startup_push_task = _create_entry_background_task(
+            hass,
+            entry,
+            async_push_startup_states(),
+            f"{DOMAIN} startup state push",
+        )
         push_tasks.add(startup_push_task)
         startup_push_task.add_done_callback(push_tasks.discard)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-    entry.async_on_unload(
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop_runtime(runtime))
-    )
 
     return True
 
@@ -170,24 +179,31 @@ async def _async_update_listener(
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-def _stop_runtime(runtime: WordPressBridgeRuntime):
-    """Return an event callback that stops runtime tasks."""
-
-    async def _async_stop(_: Event) -> None:
-        await _async_stop_runtime(runtime)
-
-    return _async_stop
-
-
 async def _async_stop_runtime(runtime: WordPressBridgeRuntime) -> None:
     """Stop listeners and background tasks."""
     runtime.unsubscribe_state_listener()
     runtime.stop_event.set()
     runtime.poll_task.cancel()
+    for task in runtime.push_tasks:
+        task.cancel()
 
     tasks = {runtime.poll_task, *runtime.push_tasks}
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _create_entry_background_task(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coro: Awaitable[None],
+    name: str,
+) -> asyncio.Task[None]:
+    """Create a background task tied to the config entry lifecycle."""
+    create_background_task = getattr(entry, "async_create_background_task", None)
+    if create_background_task is not None:
+        return create_background_task(hass, coro, name)
+
+    return hass.async_create_task(coro)
 
 
 async def _async_command_poll_loop(
