@@ -12,7 +12,6 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, State, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
@@ -69,13 +68,6 @@ async def async_setup_entry(
         str(config[CONF_API_TOKEN]).strip(),
     )
 
-    try:
-        await api.async_ping()
-    except WordPressBridgeAuthError as err:
-        raise ConfigEntryAuthFailed from err
-    except WordPressBridgeApiError as err:
-        raise ConfigEntryNotReady from err
-
     entity_ids = set(config.get(CONF_ENTITY_IDS, []))
     poll_interval = int(config.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
     push_tasks: set[asyncio.Task[None]] = set()
@@ -95,6 +87,26 @@ async def async_setup_entry(
             _LOGGER.error("WordPress rejected the bridge token while pushing state")
         except WordPressBridgeApiError as err:
             _LOGGER.warning("Could not push state for %s: %s", state.entity_id, err)
+
+    async def async_push_startup_states() -> None:
+        """Push startup states without blocking Home Assistant startup."""
+        states = [
+            _serialize_state(state)
+            for entity_id in entity_ids
+            if (state := hass.states.get(entity_id)) is not None
+        ]
+        _LOGGER.debug("Pushing %d startup states to WordPress", len(states))
+        if not states:
+            return
+
+        try:
+            await api.async_push_states(states)
+        except WordPressBridgeAuthError:
+            _LOGGER.error("WordPress rejected the bridge token while pushing startup states")
+        except WordPressBridgeApiError as err:
+            _LOGGER.warning("Initial state push failed: %s", err)
+        except Exception:
+            _LOGGER.exception("Unexpected error while pushing startup states")
 
     @callback
     def state_changed(event: Event) -> None:
@@ -130,17 +142,9 @@ async def async_setup_entry(
     entry.runtime_data = runtime
 
     if config.get(CONF_PUSH_ON_START, DEFAULT_PUSH_ON_START):
-        states = [
-            _serialize_state(state)
-            for entity_id in entity_ids
-            if (state := hass.states.get(entity_id)) is not None
-        ]
-        _LOGGER.debug("Pushing %d startup states to WordPress", len(states))
-        if states:
-            try:
-                await api.async_push_states(states)
-            except WordPressBridgeApiError as err:
-                _LOGGER.warning("Initial state push failed: %s", err)
+        startup_push_task = hass.async_create_task(async_push_startup_states())
+        push_tasks.add(startup_push_task)
+        startup_push_task.add_done_callback(push_tasks.discard)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     entry.async_on_unload(
