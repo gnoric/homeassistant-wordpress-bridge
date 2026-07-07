@@ -60,10 +60,13 @@ async def async_setup_entry(
 ) -> bool:
     """Set up WordPress Bridge from a config entry."""
     config = {**entry.data, **entry.options}
+    if not str(config.get(CONF_API_TOKEN, "")).strip() and entry.data.get(CONF_API_TOKEN):
+        config[CONF_API_TOKEN] = entry.data[CONF_API_TOKEN]
+
     api = WordPressBridgeApi(
         async_get_clientsession(hass),
         config[CONF_SITE_URL],
-        config[CONF_API_TOKEN],
+        str(config[CONF_API_TOKEN]).strip(),
     )
 
     try:
@@ -305,22 +308,6 @@ def _command_stale_reason(command: dict[str, Any], current_state: State | None) 
             f"Stale command skipped: expected state {expected_state!r}, "
             f"current state is {current_state.state!r}"
         )
-
-    expected_context_id = command.get("expected_context_id")
-    if (
-        isinstance(expected_context_id, str)
-        and expected_context_id != ""
-        and current_state.context.id != expected_context_id
-    ):
-        return "Stale command skipped: Home Assistant context changed before execution"
-
-    expected_last_updated = command.get("expected_last_updated")
-    if (
-        isinstance(expected_last_updated, str)
-        and expected_last_updated != ""
-        and _format_datetime(current_state.last_updated) != expected_last_updated
-    ):
-        return "Stale command skipped: Home Assistant state timestamp changed before execution"
 
     return None
 

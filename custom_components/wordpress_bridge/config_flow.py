@@ -48,7 +48,10 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 CONF_SITE_URL,
                 default=defaults.get(CONF_SITE_URL, "https://example.com"),
             ): str,
-            vol.Required(CONF_API_TOKEN): str,
+            vol.Required(
+                CONF_API_TOKEN,
+                default=defaults.get(CONF_API_TOKEN, ""),
+            ): str,
             vol.Required(
                 CONF_ENTITY_IDS,
                 default=defaults.get(CONF_ENTITY_IDS, []),
@@ -79,6 +82,7 @@ class WordPressBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             user_input = dict(user_input)
             user_input[CONF_SITE_URL] = user_input[CONF_SITE_URL].rstrip("/")
+            user_input[CONF_API_TOKEN] = user_input[CONF_API_TOKEN].strip()
             user_input[CONF_ENTITY_IDS] = _parse_entity_ids(user_input[CONF_ENTITY_IDS])
 
             session = async_get_clientsession(self.hass)
@@ -129,7 +133,11 @@ class WordPressBridgeOptionsFlow(config_entries.OptionsFlow):
         """Manage options."""
         if user_input is not None:
             user_input = dict(user_input)
+            defaults = {**self.config_entry.data, **self.config_entry.options}
             user_input[CONF_SITE_URL] = user_input[CONF_SITE_URL].rstrip("/")
+            user_input[CONF_API_TOKEN] = user_input[CONF_API_TOKEN].strip()
+            if "" == user_input[CONF_API_TOKEN] and defaults.get(CONF_API_TOKEN):
+                user_input[CONF_API_TOKEN] = defaults[CONF_API_TOKEN]
             user_input[CONF_ENTITY_IDS] = _parse_entity_ids(user_input[CONF_ENTITY_IDS])
             return self.async_create_entry(title="", data=user_input)
 
