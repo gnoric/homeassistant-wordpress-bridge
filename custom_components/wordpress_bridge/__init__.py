@@ -80,6 +80,13 @@ async def async_setup_entry(
     poll_interval = int(config.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
     push_tasks: set[asyncio.Task[None]] = set()
 
+    _LOGGER.info(
+        "WordPress Bridge loaded for %s with %d exposed entities; polling every %d seconds",
+        config[CONF_SITE_URL],
+        len(entity_ids),
+        poll_interval,
+    )
+
     async def async_push_state(state: State) -> None:
         """Push a single state to WordPress."""
         try:
@@ -128,6 +135,7 @@ async def async_setup_entry(
             for entity_id in entity_ids
             if (state := hass.states.get(entity_id)) is not None
         ]
+        _LOGGER.debug("Pushing %d startup states to WordPress", len(states))
         if states:
             try:
                 await api.async_push_states(states)
@@ -186,9 +194,12 @@ async def _async_command_poll_loop(
     stop_event: asyncio.Event,
 ) -> None:
     """Poll WordPress for pending commands until stopped."""
+    _LOGGER.debug("WordPress command poll loop started")
     while not stop_event.is_set():
         try:
+            _LOGGER.debug("Polling WordPress for pending commands")
             commands = await api.async_get_pending_commands()
+            _LOGGER.debug("WordPress returned %d pending commands", len(commands))
             for command in commands:
                 await _async_handle_command(hass, api, entity_ids, command)
         except WordPressBridgeAuthError:
@@ -216,11 +227,20 @@ async def _async_handle_command(
     service = command.get("command")
     payload = command.get("payload") or {}
 
+    _LOGGER.debug(
+        "Handling WordPress command id=%s entity=%s service=%s payload=%s",
+        command_id,
+        entity_id,
+        service,
+        payload,
+    )
+
     if command_id is None:
         _LOGGER.warning("Ignoring command without an id: %s", command)
         return
 
     if not isinstance(entity_id, str) or entity_id not in entity_ids:
+        _LOGGER.warning("Rejecting command %s: entity %r is not exposed", command_id, entity_id)
         await api.async_ack_command(
             command_id,
             status="failed",
@@ -248,6 +268,7 @@ async def _async_handle_command(
     current_state = hass.states.get(entity_id)
     stale_message = _command_stale_reason(command, current_state)
     if stale_message is not None:
+        _LOGGER.info("Skipping stale WordPress command %s for %s: %s", command_id, entity_id, stale_message)
         await api.async_ack_command(
             command_id,
             status="stale",
@@ -263,6 +284,7 @@ async def _async_handle_command(
         service_data.update(payload)
 
     try:
+        _LOGGER.info("Executing WordPress command %s: %s.%s", command_id, domain, service)
         await hass.services.async_call(
             domain,
             service,
@@ -279,6 +301,7 @@ async def _async_handle_command(
         return
 
     state = hass.states.get(entity_id)
+    _LOGGER.debug("Command %s completed; latest state for %s is %s", command_id, entity_id, state.state if state else None)
     await api.async_ack_command(
         command_id,
         status="done",
