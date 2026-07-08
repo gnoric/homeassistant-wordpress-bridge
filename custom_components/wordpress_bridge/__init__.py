@@ -34,6 +34,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+COMMAND_STATE_SETTLE_TIMEOUT = 5
 
 
 @dataclass
@@ -354,6 +355,8 @@ async def _async_handle_command(
     if isinstance(payload, dict):
         service_data.update(payload)
 
+    before_state = hass.states.get(entity_id)
+
     try:
         _LOGGER.info("Executing WordPress command %s: %s.%s", command_id, domain, service)
         await hass.services.async_call(
@@ -371,7 +374,7 @@ async def _async_handle_command(
         )
         return
 
-    state = hass.states.get(entity_id)
+    state = await _async_wait_for_command_state(hass, entity_id, before_state)
     _LOGGER.debug("Command %s completed; latest state for %s is %s", command_id, entity_id, state.state if state else None)
     await api.async_ack_command(
         command_id,
@@ -381,6 +384,53 @@ async def _async_handle_command(
     )
     if state is not None:
         await _async_push_latest_state(api, state)
+
+
+async def _async_wait_for_command_state(
+    hass: HomeAssistant,
+    entity_id: str,
+    before_state: State | None,
+) -> State | None:
+    """Wait briefly for the service call to produce a newer entity state."""
+    current = hass.states.get(entity_id)
+    if _is_newer_state(before_state, current):
+        return current
+
+    future: asyncio.Future[State] = hass.loop.create_future()
+
+    @callback
+    def state_changed(event: Event) -> None:
+        new_state: State | None = event.data.get("new_state")
+        if _is_newer_state(before_state, new_state) and not future.done():
+            future.set_result(new_state)
+
+    unsubscribe = async_track_state_change_event(hass, [entity_id], state_changed)
+    try:
+        current = hass.states.get(entity_id)
+        if _is_newer_state(before_state, current):
+            return current
+
+        return await asyncio.wait_for(future, timeout=COMMAND_STATE_SETTLE_TIMEOUT)
+    except TimeoutError:
+        _LOGGER.debug("Timed out waiting for %s to settle after command", entity_id)
+        return hass.states.get(entity_id)
+    finally:
+        unsubscribe()
+
+
+def _is_newer_state(before_state: State | None, candidate: State | None) -> bool:
+    """Return true when candidate appears newer than the pre-command state."""
+    if candidate is None:
+        return False
+
+    if before_state is None:
+        return True
+
+    return (
+        candidate.state != before_state.state
+        or candidate.last_updated != before_state.last_updated
+        or candidate.context.id != before_state.context.id
+    )
 
 
 async def _async_push_latest_state(api: WordPressBridgeApi, state: State) -> None:
