@@ -34,7 +34,9 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-COMMAND_STATE_SETTLE_TIMEOUT = 5
+COMMAND_STATE_SETTLE_TIMEOUT = 10
+BRIGHTNESS_TOLERANCE = 2
+RGB_TOLERANCE = 2
 
 
 @dataclass
@@ -374,7 +376,7 @@ async def _async_handle_command(
         )
         return
 
-    state = await _async_wait_for_command_state(hass, entity_id, before_state)
+    state = await _async_wait_for_command_state(hass, entity_id, before_state, service, payload)
     _LOGGER.debug("Command %s completed; latest state for %s is %s", command_id, entity_id, state.state if state else None)
     await api.async_ack_command(
         command_id,
@@ -390,10 +392,12 @@ async def _async_wait_for_command_state(
     hass: HomeAssistant,
     entity_id: str,
     before_state: State | None,
+    service: str,
+    payload: Any,
 ) -> State | None:
-    """Wait briefly for the service call to produce a newer entity state."""
+    """Wait briefly for the service call to produce the expected entity state."""
     current = hass.states.get(entity_id)
-    if _is_newer_state(before_state, current):
+    if _is_acceptable_command_state(before_state, current, service, payload):
         return current
 
     future: asyncio.Future[State] = hass.loop.create_future()
@@ -401,13 +405,13 @@ async def _async_wait_for_command_state(
     @callback
     def state_changed(event: Event) -> None:
         new_state: State | None = event.data.get("new_state")
-        if _is_newer_state(before_state, new_state) and not future.done():
+        if _is_acceptable_command_state(before_state, new_state, service, payload) and not future.done():
             future.set_result(new_state)
 
     unsubscribe = async_track_state_change_event(hass, [entity_id], state_changed)
     try:
         current = hass.states.get(entity_id)
-        if _is_newer_state(before_state, current):
+        if _is_acceptable_command_state(before_state, current, service, payload):
             return current
 
         return await asyncio.wait_for(future, timeout=COMMAND_STATE_SETTLE_TIMEOUT)
@@ -416,6 +420,84 @@ async def _async_wait_for_command_state(
         return hass.states.get(entity_id)
     finally:
         unsubscribe()
+
+
+def _is_acceptable_command_state(
+    before_state: State | None,
+    candidate: State | None,
+    service: str,
+    payload: Any,
+) -> bool:
+    """Return true when candidate is a good command result state."""
+    if not _is_newer_state(before_state, candidate):
+        return False
+
+    target_match = _command_target_matches(before_state, candidate, service, payload)
+    return target_match is not False
+
+
+def _command_target_matches(
+    before_state: State | None,
+    candidate: State | None,
+    service: str,
+    payload: Any,
+) -> bool | None:
+    """Match command-specific target state, or return None when no target is known."""
+    if candidate is None:
+        return False
+
+    expected_state = _expected_state_after_command(before_state, service)
+    if expected_state is not None and candidate.state != expected_state:
+        return False
+
+    if not isinstance(payload, dict):
+        return None if expected_state is None else True
+
+    brightness_pct = payload.get("brightness_pct")
+    if brightness_pct is not None:
+        try:
+            expected_brightness = round(max(0, min(100, float(brightness_pct))) / 100 * 255)
+            actual_brightness = int(candidate.attributes.get("brightness"))
+        except (TypeError, ValueError):
+            return False
+
+        if abs(actual_brightness - expected_brightness) > BRIGHTNESS_TOLERANCE:
+            return False
+
+    rgb_color = payload.get("rgb_color")
+    if rgb_color is not None:
+        actual_rgb = candidate.attributes.get("rgb_color")
+        if not _rgb_values_close(rgb_color, actual_rgb):
+            return False
+
+    if expected_state is None and brightness_pct is None and rgb_color is None:
+        return None
+
+    return True
+
+
+def _expected_state_after_command(before_state: State | None, service: str) -> str | None:
+    """Return the expected state for simple power commands."""
+    if service == "turn_on":
+        return "on"
+    if service == "turn_off":
+        return "off"
+    if service == "toggle" and before_state is not None:
+        return "off" if before_state.state == "on" else "on"
+    return None
+
+
+def _rgb_values_close(expected: Any, actual: Any) -> bool:
+    """Return true when two RGB triplets are effectively the same."""
+    if not isinstance(expected, (list, tuple)) or not isinstance(actual, (list, tuple)):
+        return False
+    if len(expected) < 3 or len(actual) < 3:
+        return False
+
+    try:
+        return all(abs(int(actual[index]) - int(expected[index])) <= RGB_TOLERANCE for index in range(3))
+    except (TypeError, ValueError):
+        return False
 
 
 def _is_newer_state(before_state: State | None, candidate: State | None) -> bool:
