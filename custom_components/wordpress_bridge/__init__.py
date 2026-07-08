@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import logging
 from typing import Any
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -55,18 +56,59 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async def async_poll_now(_: Any) -> None:
         """Poll all configured WordPress bridges immediately."""
         _LOGGER.warning("Manual WordPress Bridge poll requested")
-        for runtime in list(hass.data.get(DOMAIN, {}).values()):
+        runtimes = list(hass.data.get(DOMAIN, {}).values())
+        commands_seen = 0
+        commands_handled = 0
+        messages: list[str] = [
+            f"Active bridge entries: {len(runtimes)}",
+        ]
+
+        if not runtimes:
+            message = "\n".join(
+                [
+                    *messages,
+                    "No active WordPress Bridge config entries are registered.",
+                    "The domain service exists, but async_setup_entry is not active.",
+                ]
+            )
+            persistent_notification.async_create(
+                hass,
+                message,
+                title="WordPress Bridge manual poll",
+                notification_id="wordpress_bridge_manual_poll",
+            )
+            _LOGGER.error(message)
+            return
+
+        for runtime in runtimes:
+            messages.append(
+                f"Polling {len(runtime.entity_ids)} exposed entities at interval {runtime.poll_interval}s"
+            )
             try:
                 commands = await runtime.api.async_get_pending_commands()
+                commands_seen += len(commands)
                 _LOGGER.warning("Manual WordPress Bridge poll returned %d commands", len(commands))
                 for command in commands:
                     await _async_handle_command(hass, runtime.api, runtime.entity_ids, command)
+                    commands_handled += 1
             except WordPressBridgeAuthError:
+                messages.append("WordPress rejected the bridge token during manual poll.")
                 _LOGGER.error("WordPress rejected the bridge token during manual poll")
             except WordPressBridgeApiError as err:
+                messages.append(f"Manual poll failed: {err}")
                 _LOGGER.warning("Manual WordPress Bridge poll failed: %s", err)
             except Exception:
+                messages.append("Unexpected error during manual poll. Check the Home Assistant log.")
                 _LOGGER.exception("Unexpected error during manual WordPress Bridge poll")
+
+        messages.append(f"Commands fetched: {commands_seen}")
+        messages.append(f"Commands handled: {commands_handled}")
+        persistent_notification.async_create(
+            hass,
+            "\n".join(messages),
+            title="WordPress Bridge manual poll",
+            notification_id="wordpress_bridge_manual_poll",
+        )
 
     if not hass.services.has_service(DOMAIN, "poll_now"):
         hass.services.async_register(DOMAIN, "poll_now", async_poll_now)
