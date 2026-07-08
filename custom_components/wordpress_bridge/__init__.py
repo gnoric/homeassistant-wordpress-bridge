@@ -85,7 +85,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 f"Polling {len(runtime.entity_ids)} exposed entities at interval {runtime.poll_interval}s"
             )
             try:
-                commands = await runtime.api.async_get_pending_commands()
+                commands = await runtime.api.async_get_pending_commands(entity_ids=runtime.entity_ids)
                 commands_seen += len(commands)
                 _LOGGER.warning("Manual WordPress Bridge poll returned %d commands", len(commands))
                 for command in commands:
@@ -283,7 +283,7 @@ async def _async_command_poll_loop(
     while not stop_event.is_set():
         try:
             _LOGGER.debug("Polling WordPress for pending commands")
-            commands = await api.async_get_pending_commands()
+            commands = await api.async_get_pending_commands(entity_ids=entity_ids)
             _LOGGER.debug("WordPress returned %d pending commands", len(commands))
             for command in commands:
                 await _async_handle_command(hass, api, entity_ids, command)

@@ -87,10 +87,16 @@ class WordPressBridgeApi:
         return data if isinstance(data, dict) else {}
 
     async def async_get_pending_commands(
-        self, limit: int = DEFAULT_COMMAND_LIMIT
+        self,
+        limit: int = DEFAULT_COMMAND_LIMIT,
+        entity_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch pending commands created by WordPress."""
-        data = await self._request("GET", "commands/pending", params={"limit": limit})
+        params: dict[str, Any] = {"limit": limit}
+        if entity_ids:
+            params["entities"] = ",".join(sorted(entity_ids))
+
+        data = await self._request("GET", "commands/pending", params=params)
 
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
