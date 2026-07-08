@@ -50,6 +50,27 @@ class WordPressBridgeRuntime:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the integration package."""
+    hass.data.setdefault(DOMAIN, {})
+
+    async def async_poll_now(_: Any) -> None:
+        """Poll all configured WordPress bridges immediately."""
+        _LOGGER.warning("Manual WordPress Bridge poll requested")
+        for runtime in list(hass.data.get(DOMAIN, {}).values()):
+            try:
+                commands = await runtime.api.async_get_pending_commands()
+                _LOGGER.warning("Manual WordPress Bridge poll returned %d commands", len(commands))
+                for command in commands:
+                    await _async_handle_command(hass, runtime.api, runtime.entity_ids, command)
+            except WordPressBridgeAuthError:
+                _LOGGER.error("WordPress rejected the bridge token during manual poll")
+            except WordPressBridgeApiError as err:
+                _LOGGER.warning("Manual WordPress Bridge poll failed: %s", err)
+            except Exception:
+                _LOGGER.exception("Unexpected error during manual WordPress Bridge poll")
+
+    if not hass.services.has_service(DOMAIN, "poll_now"):
+        hass.services.async_register(DOMAIN, "poll_now", async_poll_now)
+
     return True
 
 
@@ -147,6 +168,7 @@ async def async_setup_entry(
         push_tasks=push_tasks,
     )
     entry.runtime_data = runtime
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
     if config.get(CONF_PUSH_ON_START, DEFAULT_PUSH_ON_START):
         startup_push_task = _create_entry_background_task(
@@ -169,6 +191,7 @@ async def async_unload_entry(
     """Unload a config entry."""
     runtime = entry.runtime_data
     await _async_stop_runtime(runtime)
+    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return True
 
 
@@ -285,20 +308,6 @@ async def _async_handle_command(
         )
         return
 
-    current_state = hass.states.get(entity_id)
-    stale_message = _command_stale_reason(command, current_state)
-    if stale_message is not None:
-        _LOGGER.info("Skipping stale WordPress command %s for %s: %s", command_id, entity_id, stale_message)
-        await api.async_ack_command(
-            command_id,
-            status="stale",
-            message=stale_message,
-            state=_serialize_state(current_state) if current_state is not None else None,
-        )
-        if current_state is not None:
-            await _async_push_latest_state(api, current_state)
-        return
-
     service_data = {"entity_id": entity_id}
     if isinstance(payload, dict):
         service_data.update(payload)
@@ -338,21 +347,6 @@ async def _async_push_latest_state(api: WordPressBridgeApi, state: State) -> Non
         await api.async_push_states([_serialize_state(state)])
     except WordPressBridgeApiError as err:
         _LOGGER.warning("Could not push command result state for %s: %s", state.entity_id, err)
-
-
-def _command_stale_reason(command: dict[str, Any], current_state: State | None) -> str | None:
-    """Return a reason if a command no longer matches the expected HA state."""
-    if current_state is None:
-        return "Entity no longer exists in Home Assistant"
-
-    expected_state = command.get("expected_state")
-    if isinstance(expected_state, str) and expected_state != "" and current_state.state != expected_state:
-        return (
-            f"Stale command skipped: expected state {expected_state!r}, "
-            f"current state is {current_state.state!r}"
-        )
-
-    return None
 
 
 def _serialize_state(state: State) -> dict[str, Any]:
